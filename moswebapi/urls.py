@@ -18,7 +18,7 @@ from django.urls import include, path
 
 urlpatterns = [
     path('stocks/', include('stocks.urls')),
-    path('MOS_Strategy-api/', include('MOS_Strategy.urls')),
+    path('api/', include('MOS_Strategy.urls')),
     path('emailapi/', include('emailapi.urls')),
     path('getrate/', include('getrate.urls')),
     path('admin/', admin.site.urls),
