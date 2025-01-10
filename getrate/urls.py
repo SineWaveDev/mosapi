@@ -30,8 +30,8 @@ Including another URLconf
 # ]
 
 from django.urls import path
-from .views import GetRate
+from .views import StockPriceView
 
 urlpatterns = [
-    path('', GetRate.as_view()),
+    path('', StockPriceView.as_view()),
 ]

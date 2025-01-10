@@ -1,77 +1,94 @@
-import datetime
 import yfinance as yf
-import datetime as dt
-import pandas as pd
-from django.http import JsonResponse
-from django.http import HttpResponse
-from rest_framework import status
-from rest_framework.response import Response
 from rest_framework.views import APIView
-import json
+from rest_framework.response import Response
+from rest_framework import status
+from datetime import datetime
 
+class StockPriceView(APIView):
 
-class GetRate(APIView):
     def get(self, request):
-        tickerslist = request.GET.getlist('tickerslist', None)
-        financial_year = request.GET.get('financial_year', None)
-        print("financial_year", financial_year)
+        financial_year = request.query_params.get('financial_year')
+        tickers = request.query_params.get('tickerslist')
 
-        # Split financial_year only if it contains '-'
-        if '-' in financial_year:
-            financial_year = financial_year.split('-')
+        # Validate financial_year format (e.g., '2024-2025')
+        if not financial_year or not tickers:
+            return Response({"error": "Both financial_year and tickerslist are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            financial_year_start, financial_year_end = financial_year.split('-')
+            financial_year_start = int(financial_year_start)
+            financial_year_end = int(financial_year_end)
+        except ValueError:
+            return Response({"error": "Invalid financial_year format. Please use 'YYYY-YYYY'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get current financial year based on today's date
+        current_year = datetime.now().year
+        current_month = datetime.now().month
+
+        # Check if current month is before or after March to determine the fiscal year
+        if current_month <= 3:
+            current_financial_year = f"{current_year - 1}-{current_year}"
         else:
-            # Handle the case where financial_year doesn't contain '-'
-            return Response("Invalid financial year format", status=status.HTTP_400_BAD_REQUEST)
+            current_financial_year = f"{current_year}-{current_year + 1}"
 
-        # Extract the start year and end year from the financial year range
-        start_year, end_year = map(int, financial_year)
+        # Fetch stock data based on comparison of financial years
+        stock_data = self.get_stock_data(tickers)
 
-        current_year = dt.date.today().year
-        print("current_year", current_year)
+        if financial_year == current_financial_year:
+            return Response({
+                "financial_year": financial_year,
+                "ticker": tickers,
+                "price": stock_data
+            })
 
-        date_str = ""
-        next_date_str = ""
+        elif financial_year < current_financial_year:
+            # Fetch stock data for the last day of March for the passed financial year
+            return Response({
+                "financial_year": financial_year,
+                "ticker": tickers,
+                "price": self.get_stock_data_on_march_31(tickers, financial_year)
+            })
 
-        if start_year == current_year - 5 and end_year == current_year - 4:
-            # If the financial year is 2019-2020
-            date_str = "2020-03-31"
-            next_date_str = "2020-04-01"
-        elif start_year == current_year - 4 and end_year == current_year - 3:
-            # If the financial year is 2020-2021
-            date_str = "2021-03-31"
-            next_date_str = "2021-04-01"
-        elif start_year == current_year - 3 and end_year == current_year - 2:
-            # If the financial year is 2021-2022
-            date_str = "2022-03-31"
-            next_date_str = "2022-04-01"
-        elif start_year == current_year - 2 and end_year == current_year - 1:
-            # If the financial year is 2022-2023
-            date_str = "2023-03-31"
-            next_date_str = "2023-04-01"
-        elif start_year == current_year - 1 and end_year == current_year:
-            # If the financial year is 2023-2024
-            date_str = "2023-03-28"
-            next_date_str = "2023-03-29"
-        elif start_year == current_year and end_year == current_year + 1:
-            # If the financial year is 2024-2025
-            date_str = str(dt.date.today())
-            next_date_str = str(dt.date.today() + datetime.timedelta(days=1))
-        else:
-            # Handle invalid financial year ranges
-            return Response("Invalid financial year range", status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Invalid financial year."}, status=status.HTTP_400_BAD_REQUEST)
 
-        print("Start_Date", date_str)
-        print("end_date", next_date_str)
+    def get_stock_data(self, tickers):
+        # Fetch today's stock price
+        stock = yf.Ticker(tickers)
+        todays_data = stock.history(period="1d").iloc[0]
 
-        df = pd.DataFrame()
+        # Safely access stock data columns
+        stock_data = {
+            "open": todays_data.get('Open', None),
+            "high": todays_data.get('High', None),
+            "low": todays_data.get('Low', None),
+            "close": todays_data.get('Close', None),
+            "adj_close": todays_data.get('Adj Close', None),  # Using get() to avoid KeyError
+            "volume": todays_data.get('Volume', None)
+        }
+        return stock_data
 
-        for ticker in tickerslist:
-            data = yf.download(
-                tickers=ticker, start=date_str, end=next_date_str)
-            print("data", data)
-            df = pd.concat([df, data])
+    def get_stock_data_on_march_31(self, tickers, financial_year):
+        # Convert financial_year to an integer if it is a string
+        financial_year = int(financial_year.split('-')[0])
+        
+        # Calculate the end date for the given financial year (March 31st of the next year)
+        start_date = f"{financial_year}-04-01"
+        end_date = f"{financial_year + 1}-03-31"
+        
+        # Fetch stock data from yfinance
+        stock = yf.Ticker(tickers)
+        data = stock.history(start=start_date, end=end_date)
+        
+        # Get the last date in March (March 31st)
+        march_31_data = data.loc[data.index.month == 3].iloc[-1]
 
-        df1 = df.to_json(orient='records')
-        print(df1)
-
-        return Response(df1)
+        # Safely access stock data columns
+        stock_data = {
+            "open": march_31_data.get('Open', None),
+            "high": march_31_data.get('High', None),
+            "low": march_31_data.get('Low', None),
+            "close": march_31_data.get('Close', None),
+            "adj_close": march_31_data.get('Adj Close', None),  # Using get() to avoid KeyError
+            "volume": march_31_data.get('Volume', None)
+        }
+        return stock_data
