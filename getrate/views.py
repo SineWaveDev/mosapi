@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime
+import pandas as pd
 
 class StockPriceView(APIView):
 
@@ -10,7 +11,7 @@ class StockPriceView(APIView):
         financial_year = request.query_params.get('financial_year')
         tickers = request.query_params.get('tickerslist')
 
-        # Validate financial_year format (e.g., '2024-2025')
+        # Validate input parameters
         if not financial_year or not tickers:
             return Response({"error": "Both financial_year and tickerslist are required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -24,71 +25,85 @@ class StockPriceView(APIView):
         # Get current financial year based on today's date
         current_year = datetime.now().year
         current_month = datetime.now().month
-
-        # Check if current month is before or after March to determine the fiscal year
         if current_month <= 3:
             current_financial_year = f"{current_year - 1}-{current_year}"
         else:
             current_financial_year = f"{current_year}-{current_year + 1}"
 
-        # Fetch stock data based on comparison of financial years
-        stock_data = self.get_stock_data(tickers)
+        # Validate ticker
+        try:
+            stock = yf.Ticker(tickers)
+            stock_info = stock.info  # Check if ticker is valid
+            if not stock_info or 'symbol' not in stock_info:
+                return Response({"error": f"Ticker {tickers} is invalid or not found."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": f"Failed to validate ticker {tickers}: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Fetch stock data based on financial year
         if financial_year == current_financial_year:
+            stock_data = self.get_stock_data(tickers)
+            if stock_data is None:
+                return Response({"error": f"No data available for {tickers} today."}, status=status.HTTP_404_NOT_FOUND)
             return Response({
                 "financial_year": financial_year,
                 "ticker": tickers,
                 "price": stock_data
             })
-
-        elif financial_year < current_financial_year:
-            # Fetch stock data for the last day of March for the passed financial year
+        elif financial_year_end <= current_year:  # Ensure past financial year
+            stock_data = self.get_stock_data_on_march_31(tickers, financial_year)
+            if stock_data is None:
+                return Response({"error": f"No data available for {tickers} on March 31, {financial_year_end}."}, status=status.HTTP_404_NOT_FOUND)
             return Response({
                 "financial_year": financial_year,
                 "ticker": tickers,
-                "price": self.get_stock_data_on_march_31(tickers, financial_year)
+                "price": stock_data
             })
-
-        return Response({"error": "Invalid financial year."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"error": "Future financial years are not supported."}, status=status.HTTP_400_BAD_REQUEST)
 
     def get_stock_data(self, tickers):
-        # Fetch today's stock price
-        stock = yf.Ticker(tickers)
-        todays_data = stock.history(period="1d").iloc[0]
-
-        # Safely access stock data columns
-        stock_data = {
-            "open": todays_data.get('Open', None),
-            "high": todays_data.get('High', None),
-            "low": todays_data.get('Low', None),
-            "close": todays_data.get('Close', None),
-            "adj_close": todays_data.get('Adj Close', None),  # Using get() to avoid KeyError
-            "volume": todays_data.get('Volume', None)
-        }
-        return stock_data
+        try:
+            stock = yf.Ticker(tickers)
+            todays_data = stock.history(period="1d")
+            if todays_data.empty:
+                return None
+            todays_data = todays_data.iloc[0]
+            stock_data = {
+                "open": todays_data.get('Open', None),
+                "high": todays_data.get('High', None),
+                "low": todays_data.get('Low', None),
+                "close": todays_data.get('Close', None),
+                "adj_close": todays_data.get('Adj Close', None),
+                "volume": todays_data.get('Volume', None)
+            }
+            return stock_data
+        except Exception as e:
+            print(f"Error fetching today's data for {tickers}: {e}")
+            return None
 
     def get_stock_data_on_march_31(self, tickers, financial_year):
-        # Convert financial_year to an integer if it is a string
-        financial_year = int(financial_year.split('-')[0])
-        
-        # Calculate the end date for the given financial year (March 31st of the next year)
-        start_date = f"{financial_year}-04-01"
-        end_date = f"{financial_year + 1}-03-31"
-        
-        # Fetch stock data from yfinance
-        stock = yf.Ticker(tickers)
-        data = stock.history(start=start_date, end=end_date)
-        
-        # Get the last date in March (March 31st)
-        march_31_data = data.loc[data.index.month == 3].iloc[-1]
-
-        # Safely access stock data columns
-        stock_data = {
-            "open": march_31_data.get('Open', None),
-            "high": march_31_data.get('High', None),
-            "low": march_31_data.get('Low', None),
-            "close": march_31_data.get('Close', None),
-            "adj_close": march_31_data.get('Adj Close', None),  # Using get() to avoid KeyError
-            "volume": march_31_data.get('Volume', None)
-        }
-        return stock_data
+        try:
+            financial_year_start = int(financial_year.split('-')[0])
+            start_date = f"{financial_year_start}-04-01"
+            end_date = f"{financial_year_start + 1}-03-31"
+            stock = yf.Ticker(tickers)
+            data = stock.history(start=start_date, end=end_date)
+            if data.empty:
+                return None
+            # Filter for the last trading day in March
+            march_data = data[data.index.month == 3]
+            if march_data.empty:
+                return None
+            march_31_data = march_data.iloc[-1]
+            stock_data = {
+                "open": march_31_data.get('Open', None),
+                "high": march_31_data.get('High', None),
+                "low": march_31_data.get('Low', None),
+                "close": march_31_data.get('Close', None),
+                "adj_close": march_31_data.get('Adj Close', None),
+                "volume": march_31_data.get('Volume', None)
+            }
+            return stock_data
+        except Exception as e:
+            print(f"Error fetching data for {tickers} on March 31, {financial_year}: {e}")
+            return None
