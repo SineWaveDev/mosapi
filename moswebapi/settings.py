@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'MOS_Strategy',
     'emailapi',
+    'as26_json_data',
     'rest_framework'
 ]
 

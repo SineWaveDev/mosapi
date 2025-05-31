@@ -21,6 +21,7 @@ urlpatterns = [
     path('api/', include('MOS_Strategy.urls')),
     path('emailapi/', include('emailapi.urls')),
     path('getrate/', include('getrate.urls')),
+    path('api/', include('as26_json_data.urls')),
     path('admin/', admin.site.urls),
 ]
 
